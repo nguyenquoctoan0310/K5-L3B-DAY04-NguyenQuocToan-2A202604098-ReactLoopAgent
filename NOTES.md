@@ -201,3 +201,37 @@ Cần tiếp tục kiểm tra để xác định nguyên nhân và tránh các l
     khi người dùng hỏi về tình trạng hệ thống hiện tại. Sau đó cần chạy
     đánh giá nhiều lần để kiểm tra độ ổn định trước khi kết luận thay
     đổi có hiệu quả.
+
+
+## 6. Thử thách bonus
+
+### 6.1. Phạm vi triển khai
+
+Tôi mở rộng agent để sử dụng bộ tools bonus gồm năm status API: GitHub, Cloudflare, Vercel, npm và DigitalOcean; đồng thời sử dụng `get_incident_details` để đọc timeline theo trang. Agent lấy `schemas` và `system_prompt` từ đối tượng tools khi các thuộc tính này tồn tại, nhờ đó vẫn tương thích với bộ tools của bài chính.
+
+### 6.2. Xử lý rate limit và lỗi tham số
+
+- Khi tool trả `RATE_LIMITED`, agent chuyển nguyên thông tin lỗi về model dưới dạng tool observation để model quyết định bước tiếp theo.
+- Bổ sung giới hạn ở tầng agent: tối đa 3 lần gọi cho cùng tool/provider sau các phản hồi 429. Nếu model tiếp tục gọi, agent không thực thi request thứ tư mà trả observation `RATE_LIMITED` với `retries_exhausted: true`.
+- Với lỗi `INVALID_ARGUMENTS`, agent trả lỗi về model để model sửa tham số. Các tham số `offset` và `limit` được tool kiểm tra kiểu integer và giới hạn hợp lệ.
+- HTTP 429 không được xem là bằng chứng dịch vụ outage. Khi không thể retry hợp lý trong ngân sách bước, agent cần báo trạng thái chưa xác minh.
+
+### 6.3. Pagination và kiểm soát context
+
+Tool `get_incident_details` hỗ trợ `offset` và `limit` (1–3). Agent có thể dùng `next_offset` để đọc trang tiếp theo khi câu hỏi cần thông tin ở timeline cũ hơn. System prompt yêu cầu không tuyên bố đã đọc hết timeline nếu vẫn còn `next_offset`, không lặp lại trang và chỉ sử dụng các incident/component liên quan thay vì đưa toàn bộ dữ liệu nhiễu vào câu trả lời.
+
+### 6.4. Kiểm tra offline
+
+Đã bổ sung kiểm thử cho hai tình huống:
+- Rate limit kéo dài: xác nhận agent chỉ thực thi tối đa 3 lần gọi status tool và trả thông tin hết lượt retry về model.
+- Pagination: xác nhận agent đọc tiếp từ `next_offset` và trace ghi nhận hai offset khác nhau.
+
+Kết quả kiểm tra tại thời điểm hoàn thiện:
+- `python -m unittest discover -s tests -v`: **37 tests passed**.
+- `python -m unittest discover -s bonus -p "test_*.py" -v`: **5 tests passed**.
+
+Đây là kiểm thử offline với snapshot và scripted provider, không phải kết quả đánh giá bằng LLM judge.
+
+### 6.5. Giới hạn và bước đánh giá còn lại
+
+Chưa chạy `evals/run_evals.py --bonus` trong môi trường hoàn thiện này vì chưa có provider/model/API key được cấu hình. Vì vậy chưa có `eval_bonus.json` và chưa thể kết luận điểm bonus. Trước khi nộp cần cấu hình API key cục bộ, chạy đủ 10 case B1–B10 bằng cùng cấu hình, kiểm tra `summary.score_0_100` khác `null` và `bonus_points_0_15` được tính. Không dùng kết quả chạy một case để thay thế điểm của toàn bộ bộ bonus.

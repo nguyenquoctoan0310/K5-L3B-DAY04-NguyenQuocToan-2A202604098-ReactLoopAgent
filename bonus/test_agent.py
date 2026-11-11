@@ -51,4 +51,35 @@ class BonusAgentTests(unittest.TestCase):
         self.assertEqual(json.loads(p.histories[1][-1]['content'])['error'],'INVALID_ARGUMENTS')
         self.assertTrue(json.loads(p.histories[2][-1]['content'])['ok'])
 
+
+    def test_persistent_429_is_capped_at_three_calls(self):
+        t=BonusTools(scenario='rate_limit_always')
+        p=ScriptedProvider([
+            call('1','get_vercel_status',{}),
+            call('2','get_vercel_status',{}),
+            call('3','get_vercel_status',{}),
+            call('4','get_vercel_status',{}),
+            final('Vercel chưa thể xác minh do rate limit kéo dài.')
+        ])
+        result=run_agent('Kiểm tra Vercel',p,t,max_steps=6)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual(t.calls[('get_vercel_status','vercel')],3)
+        last_observation=json.loads(p.histories[4][-1]['content'])
+        self.assertTrue(last_observation['retries_exhausted'])
+        self.assertEqual(last_observation['error'],'RATE_LIMITED')
+
+    def test_agent_can_follow_timeline_pagination(self):
+        t=BonusTools()
+        first=t.execute('get_incident_details',{'provider':'vercel','incident_id':'sps6n39gm4sg','offset':0,'limit':2})
+        second=t.execute('get_incident_details',{'provider':'vercel','incident_id':'sps6n39gm4sg','offset':first['next_offset'],'limit':2})
+        p=ScriptedProvider([
+            call('1','get_incident_details',{'provider':'vercel','incident_id':'sps6n39gm4sg','offset':0,'limit':2}),
+            call('2','get_incident_details',{'provider':'vercel','incident_id':'sps6n39gm4sg','offset':first['next_offset'],'limit':2}),
+            final('Incident lịch sử đã resolved. Nguồn: '+first['url'])
+        ])
+        result=run_agent('Đọc timeline Vercel',p,t,max_steps=5)
+        self.assertEqual(result['status'],'completed')
+        self.assertEqual([x['arguments']['offset'] for x in result['trace'] if x['event']=='tool'],[0,2])
+        self.assertTrue(any('93njd414rpbx' in u['body'] for u in second['updates']))
+
 if __name__=='__main__': unittest.main()

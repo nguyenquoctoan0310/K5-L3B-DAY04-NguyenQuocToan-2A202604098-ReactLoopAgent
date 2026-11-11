@@ -31,6 +31,8 @@ def run_agent(question, provider, tools, max_steps=6):
     schemas = getattr(tools, 'schemas', SCHEMAS)
     trace, usage = [], []
     incident_urls = set()
+    # Chặn retry 429 vô hạn ở tầng agent; tối đa 3 lần gọi cho mỗi tool/provider.
+    rate_limit_attempts = {}
     answer = ''
 
     def outcome(status, error=None):
@@ -70,10 +72,22 @@ def run_agent(question, provider, tools, max_steps=6):
                 except (ValueError, TypeError):
                     result = {'ok': False, 'error': 'INVALID_ARGUMENTS'}
                 else:
-                    try:
-                        result = tools.execute(name, arguments)
-                    except Exception as exc:
-                        result = {'ok': False, 'error': type(exc).__name__}
+                    # Dùng provider trong arguments để tách ngân sách retry theo dịch vụ.
+                    target = arguments.get('provider', '') if isinstance(arguments, dict) else ''
+                    retry_key = (name, str(target))
+                    if rate_limit_attempts.get(retry_key, 0) >= 3:
+                        result = {
+                            'ok': False, 'error': 'RATE_LIMITED',
+                            'retries_exhausted': True,
+                            'message': 'Đã đạt giới hạn 3 lần gọi tool do HTTP 429; dừng retry và báo trạng thái chưa xác minh.'
+                        }
+                    else:
+                        try:
+                            result = tools.execute(name, arguments)
+                        except Exception as exc:
+                            result = {'ok': False, 'error': type(exc).__name__}
+                        if isinstance(result, dict) and result.get('error') == 'RATE_LIMITED':
+                            rate_limit_attempts[retry_key] = rate_limit_attempts.get(retry_key, 0) + 1
 
                 trace.append({
                     'event': 'tool', 'step': step, 'name': name,
